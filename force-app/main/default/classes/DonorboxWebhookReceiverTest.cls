@@ -11,8 +11,14 @@ private class DonorboxWebhookReceiverTest {
     }
 
     @IsTest
-    static void rejectsRequestWithoutSecret() {
-        RestResponse res = callWebhook('{"id":"123"}', null);
+    static void rejectsRequestWithoutSignature() {
+        RestResponse res = callWebhook(donationPayload('4001', 'donation.created', '50.0', '0.0'), null);
+        System.assertEquals(401, res.statusCode);
+    }
+
+    @IsTest
+    static void rejectsInvalidSignature() {
+        RestResponse res = callWebhookRaw(donationPayload('4002', 'donation.created', '50.0', '0.0'), 'deadbeef');
         System.assertEquals(401, res.statusCode);
     }
 
@@ -23,21 +29,8 @@ private class DonorboxWebhookReceiverTest {
     }
 
     @IsTest
-    static void rejectsPayloadWithoutDonationId() {
-        RestResponse res = callWebhook('{"email":"donor@example.com"}', SECRET);
-        System.assertEquals(500, res.statusCode);
-    }
-
-    @IsTest
     static void createsDonorAndDonationOpportunity() {
-        String body = JSON.serialize(new Map<String, Object>{
-            'id' => '1001',
-            'type' => 'donation',
-            'amount' => '50.00',
-            'email' => 'donor@example.com',
-            'first_name' => 'Jane',
-            'last_name' => 'Doe'
-        });
+        String body = donationPayload('1001', 'donation.created', '50.00', '0.0');
 
         RestResponse res = callWebhook(body, SECRET);
         System.assertEquals(200, res.statusCode);
@@ -58,14 +51,7 @@ private class DonorboxWebhookReceiverTest {
 
     @IsTest
     static void sameDonationIdIsIdempotent() {
-        String body = JSON.serialize(new Map<String, Object>{
-            'id' => '2002',
-            'type' => 'donation',
-            'amount' => '25.00',
-            'email' => 'repeat@example.com',
-            'first_name' => 'Sam',
-            'last_name' => 'Smith'
-        });
+        String body = donationPayload('2002', 'donation.created', '25.00', '0.0');
 
         callWebhook(body, SECRET);
         callWebhook(body, SECRET);
@@ -75,16 +61,10 @@ private class DonorboxWebhookReceiverTest {
     }
 
     @IsTest
-    static void marksOpportunityAsRefunded() {
-        String body = JSON.serialize(new Map<String, Object>{
-            'id' => '3003',
-            'type' => 'donation.refunded',
-            'amount' => '10.00',
-            'email' => 'refund@example.com',
-            'last_name' => 'Refunded Donor'
-        });
+    static void donationUpdatedWithRefundMarksOpportunityLost() {
+        callWebhook(donationPayload('3003', 'donation.created', '10.00', '0.0'), SECRET);
 
-        RestResponse res = callWebhook(body, SECRET);
+        RestResponse res = callWebhook(donationPayload('3003', 'donation.updated', '10.00', '10.0'), SECRET);
         System.assertEquals(200, res.statusCode);
 
         Opportunity opp = [
@@ -96,13 +76,76 @@ private class DonorboxWebhookReceiverTest {
         System.assertEquals('Closed Lost', opp.StageName);
     }
 
+    @IsTest
+    static void chargebackLostMarksOpportunityLost() {
+        callWebhook(donationPayload('5005', 'donation.created', '75.00', '0.0'), SECRET);
+
+        RestResponse res = callWebhook(donationPayload('5005', 'donation.chargeback_lost', '75.00', '0.0'), SECRET);
+        System.assertEquals(200, res.statusCode);
+
+        Opportunity opp = [
+            SELECT StageName, Donorbox_Chargeback_Status__c
+            FROM Opportunity
+            WHERE Donorbox_Donation_Id__c = '5005'
+        ];
+        System.assertEquals('lost', opp.Donorbox_Chargeback_Status__c);
+        System.assertEquals('Closed Lost', opp.StageName);
+    }
+
+    @IsTest
+    static void donorCreatedUpsertsContactWithoutOpportunity() {
+        String body = JSON.serialize(new Map<String, Object>{
+            'event_id' => '7159',
+            'event_name' => 'donor.created',
+            'donor' => new Map<String, Object>{
+                'id' => '35',
+                'first_name' => 'Alex',
+                'last_name' => 'Martin',
+                'email' => 'alex.martin@example.com'
+            }
+        });
+
+        RestResponse res = callWebhook(body, SECRET);
+        System.assertEquals(200, res.statusCode);
+
+        List<Contact> contacts = [SELECT Id FROM Contact WHERE Email = 'alex.martin@example.com'];
+        System.assertEquals(1, contacts.size());
+    }
+
+    private static String donationPayload(String donationId, String eventName, String amount, String amountRefunded) {
+        return JSON.serialize(new Map<String, Object>{
+            'event_id' => '9999',
+            'event_name' => eventName,
+            'donation' => new Map<String, Object>{
+                'id' => donationId,
+                'amount' => amount,
+                'amount_refunded' => amountRefunded,
+                'status' => 'paid',
+                'recurring' => false,
+                'donor' => new Map<String, Object>{
+                    'id' => '59',
+                    'first_name' => 'Donor',
+                    'last_name' => 'Example',
+                    'email' => 'donor@example.com'
+                }
+            }
+        });
+    }
+
     private static RestResponse callWebhook(String body, String secret) {
+        String signature = String.isBlank(secret)
+            ? null
+            : EncodingUtil.convertToHex(Crypto.generateMac('hmacSHA256', Blob.valueOf(body), Blob.valueOf(secret)));
+        return callWebhookRaw(body, signature);
+    }
+
+    private static RestResponse callWebhookRaw(String body, String signatureHeaderValue) {
         RestRequest req = new RestRequest();
         req.requestUri = '/services/apexrest/donorbox/webhook';
         req.httpMethod = 'POST';
         req.requestBody = Blob.valueOf(body);
-        if (secret != null) {
-            req.addHeader('X-Webhook-Secret', secret);
+        if (signatureHeaderValue != null) {
+            req.addHeader(DonorboxSignatureVerifier.getHeaderName(), signatureHeaderValue);
         }
 
         RestResponse res = new RestResponse();

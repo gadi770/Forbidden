@@ -1,83 +1,88 @@
 /**
- * All Donorbox-payload-shape assumptions live here, isolated from DonorboxWebhookReceiver.
- * Once the exact JSON sent by Donorbox is confirmed (see the sample Andy Proag shared),
- * only this class should need edits - update the candidate key lists below.
+ * Reads fields out of a Donorbox webhook v2 payload (untyped JSON map).
+ * Schema confirmed from https://donorbox.zendesk.com/hc/en-us/articles/4733681068820
+ * (donation.created / donation.updated / donation.chargeback_* / donor.created / donor.updated).
+ *
+ * Assumes the org's Donorbox webhook endpoint is configured for payload version v2
+ * (a single JSON object, not the v1 array format).
  */
 public with sharing class DonorboxPayloadReader {
 
-    // Ordered candidate keys: first match wins. Extend/reorder once the real payload is known.
-    private static final List<String> DONATION_ID_KEYS = new List<String>{ 'id', 'donation_id' };
-    private static final List<String> EVENT_TYPE_KEYS = new List<String>{ 'type', 'event', 'status' };
-    private static final List<String> AMOUNT_KEYS = new List<String>{ 'amount', 'total_amount' };
-    private static final List<String> EMAIL_KEYS = new List<String>{ 'email', 'donor_email' };
-    private static final List<String> FIRST_NAME_KEYS = new List<String>{ 'first_name', 'donor_first_name' };
-    private static final List<String> LAST_NAME_KEYS = new List<String>{ 'last_name', 'donor_last_name' };
-    private static final Set<String> REFUND_EVENT_MARKERS = new Set<String>{ 'refunded', 'refund', 'donation.refunded' };
-
-    public static String getDonationId(Map<String, Object> payload) {
-        Object raw = firstValue(payload, DONATION_ID_KEYS, null);
-        return raw == null ? null : String.valueOf(raw);
+    public static String getEventName(Map<String, Object> payload) {
+        return stringValue(payload, 'event_name');
     }
 
-    public static String getEventType(Map<String, Object> payload) {
-        Object raw = firstValue(payload, EVENT_TYPE_KEYS, null);
-        return raw == null ? null : String.valueOf(raw);
-    }
-
-    public static Decimal getAmount(Map<String, Object> payload) {
-        Object raw = firstValue(payload, AMOUNT_KEYS, null);
-        if (raw == null) {
-            return null;
-        }
-        try {
-            return Decimal.valueOf(String.valueOf(raw));
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    public static String getDonorEmail(Map<String, Object> payload) {
-        return stringValue(firstValue(payload, EMAIL_KEYS, donorMap(payload)));
-    }
-
-    public static String getDonorFirstName(Map<String, Object> payload) {
-        return stringValue(firstValue(payload, FIRST_NAME_KEYS, donorMap(payload)));
-    }
-
-    public static String getDonorLastName(Map<String, Object> payload) {
-        return stringValue(firstValue(payload, LAST_NAME_KEYS, donorMap(payload)));
-    }
-
-    public static Boolean isRefunded(Map<String, Object> payload, String eventType) {
-        if (String.isNotBlank(eventType) && REFUND_EVENT_MARKERS.contains(eventType.toLowerCase())) {
-            return true;
-        }
-        Object statusRaw = payload.get('status');
-        return statusRaw != null && REFUND_EVENT_MARKERS.contains(String.valueOf(statusRaw).toLowerCase());
+    public static Map<String, Object> getDonationMap(Map<String, Object> payload) {
+        return asMap(payload.get('donation'));
     }
 
     /**
-     * Some Donorbox payloads nest donor details under a "donor" object rather than at the top level.
-     * Falls back to that nested map when a top-level key is missing.
+     * donor.* events carry the donor fields at the top-level "donor" key.
+     * donation.* events carry a nested donor object under donation.donor.
      */
-    private static Map<String, Object> donorMap(Map<String, Object> payload) {
-        Object nested = payload.get('donor');
-        return nested instanceof Map<String, Object> ? (Map<String, Object>) nested : null;
-    }
-
-    private static Object firstValue(Map<String, Object> payload, List<String> keys, Map<String, Object> fallbackMap) {
-        for (String key : keys) {
-            if (payload.containsKey(key) && payload.get(key) != null) {
-                return payload.get(key);
-            }
-            if (fallbackMap != null && fallbackMap.containsKey(key) && fallbackMap.get(key) != null) {
-                return fallbackMap.get(key);
-            }
+    public static Map<String, Object> getDonorMap(Map<String, Object> payload) {
+        Map<String, Object> topLevelDonor = asMap(payload.get('donor'));
+        if (topLevelDonor != null) {
+            return topLevelDonor;
         }
-        return null;
+        Map<String, Object> donation = getDonationMap(payload);
+        return donation != null ? asMap(donation.get('donor')) : null;
     }
 
-    private static String stringValue(Object raw) {
-        return raw == null ? null : String.valueOf(raw);
+    public static String getDonationId(Map<String, Object> donation) {
+        return stringValue(donation, 'id');
+    }
+
+    public static Decimal getAmount(Map<String, Object> donation) {
+        return decimalValue(donation, 'amount');
+    }
+
+    public static Decimal getAmountRefunded(Map<String, Object> donation) {
+        Decimal value = decimalValue(donation, 'amount_refunded');
+        return value == null ? 0 : value;
+    }
+
+    public static Boolean isRecurring(Map<String, Object> donation) {
+        Object raw = donation == null ? null : donation.get('recurring');
+        return raw instanceof Boolean ? (Boolean) raw : false;
+    }
+
+    public static String getPlanId(Map<String, Object> donation) {
+        return stringValue(donation, 'plan_id');
+    }
+
+    public static String getDonorEmail(Map<String, Object> donor) {
+        return stringValue(donor, 'email');
+    }
+
+    public static String getDonorFirstName(Map<String, Object> donor) {
+        return stringValue(donor, 'first_name');
+    }
+
+    public static String getDonorLastName(Map<String, Object> donor) {
+        return stringValue(donor, 'last_name');
+    }
+
+    private static Map<String, Object> asMap(Object raw) {
+        return raw instanceof Map<String, Object> ? (Map<String, Object>) raw : null;
+    }
+
+    private static String stringValue(Map<String, Object> source, String key) {
+        if (source == null || source.get(key) == null) {
+            return null;
+        }
+        return String.valueOf(source.get(key));
+    }
+
+    private static Decimal decimalValue(Map<String, Object> source, String key) {
+        String raw = stringValue(source, key);
+        if (String.isBlank(raw)) {
+            return null;
+        }
+        try {
+            return Decimal.valueOf(raw);
+        } catch (Exception e) {
+            return null;
+        }
     }
 }
