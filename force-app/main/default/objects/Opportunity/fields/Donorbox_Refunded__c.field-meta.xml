@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Donorbox_Refunded__c</fullName>
+    <label>Donorbox Refunded</label>
+    <type>Checkbox</type>
+    <defaultValue>false</defaultValue>
+    <description>Set to true when Donorbox reports the donation as refunded, independently of StageName so reporting logic doesn't depend on picklist labels.</description>
+</CustomField>

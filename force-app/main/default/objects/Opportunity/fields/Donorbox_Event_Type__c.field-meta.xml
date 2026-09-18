@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Donorbox_Event_Type__c</fullName>
+    <label>Donorbox Event Type</label>
+    <length>100</length>
+    <type>Text</type>
+    <description>Raw event/trigger type as sent by Donorbox (e.g. donation, donation.refunded, recurring_donation.failed), kept as-is for audit and easy remapping once the exact Donorbox payload is confirmed.</description>
+</CustomField>

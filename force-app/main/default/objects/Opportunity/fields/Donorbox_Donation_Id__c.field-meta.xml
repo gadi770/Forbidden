@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Donorbox_Donation_Id__c</fullName>
+    <label>Donorbox Donation Id</label>
+    <length>255</length>
+    <type>Text</type>
+    <unique>true</unique>
+    <externalId>true</externalId>
+    <caseSensitive>false</caseSensitive>
+    <description>Donorbox donation id used as the idempotency key when Donorbox retries a webhook delivery.</description>
+</CustomField>
