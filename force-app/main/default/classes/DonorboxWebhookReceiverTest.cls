@@ -152,9 +152,7 @@ private class DonorboxWebhookReceiverTest {
         RestContext.request = req;
         RestContext.response = res;
 
-        Test.startTest();
         DonorboxWebhookReceiver.handlePost();
-        Test.stopTest();
 
         return RestContext.response;
     }
